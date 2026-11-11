@@ -1,0 +1,36 @@
+{
+  "id": "logistica-6-eta03",
+  "activation": "LOGISTIC",
+  "inputs": 6,
+  "hidden": 6,
+  "outputs": 5,
+  "learningRate": 0.3,
+  "seed": 42,
+  "shuffleSeed": 25214903879,
+  "maxEpochs": 2000,
+  "minError": 0.005,
+  "trainingSamples": 827,
+  "testSamples": 352,
+  "epochs": 15,
+  "finalError": 0.0045069428311759075,
+  "accuracy": 1.0,
+  "correct": 352,
+  "seconds": 0.0295985,
+  "stopReason": "Erro mínimo atingido",
+  "plateau": {"window": 10, "threshold": 1.0E-5, "policy": "record_and_continue_unchanged", "epochs": []},
+  "classes": ["CA", "CB", "CC", "CD", "CE"],
+  "confusionMatrix": [
+    [56, 0, 0, 0, 0],
+    [0, 53, 0, 0, 0],
+    [0, 0, 102, 0, 0],
+    [0, 0, 0, 75, 0],
+    [0, 0, 0, 0, 66]
+  ],
+  "perClass": [
+    {"class": "CA", "precision": 1.0, "recall": 1.0},
+    {"class": "CB", "precision": 1.0, "recall": 1.0},
+    {"class": "CC", "precision": 1.0, "recall": 1.0},
+    {"class": "CD", "precision": 1.0, "recall": 1.0},
+    {"class": "CE", "precision": 1.0, "recall": 1.0}
+  ]
+}
