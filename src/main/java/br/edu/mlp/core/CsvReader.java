@@ -10,75 +10,139 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.TreeSet;
 
-/** Leitor CSV autoral: vírgulas, aspas e aspas escapadas; UTF-8 com BOM opcional. */
+/** Lê arquivos CSV com cabeçalho, vírgulas, aspas e codificação UTF-8. */
 public final class CsvReader {
-    private CsvReader() { }
+    private CsvReader() {
+    }
 
-    public static Dataset read(Path file) throws IOException {
-        try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
-            String first = reader.readLine();
-            if (first == null) throw new IllegalArgumentException("O arquivo está vazio: " + file.getFileName());
-            if (first.startsWith("\uFEFF")) first = first.substring(1);
-            List<String> columns = parseLine(first, 1);
-            if (columns.size() < 2) throw new IllegalArgumentException("O CSV precisa de ao menos um atributo e da classe na última coluna.");
-            if (columns.stream().anyMatch(String::isBlank) || new HashSet<>(columns).size() != columns.size()) {
-                throw new IllegalArgumentException("O cabeçalho deve ter nomes preenchidos e distintos.");
+    public static Dataset read(Path arquivo) throws IOException {
+        try (BufferedReader leitor = Files.newBufferedReader(arquivo, StandardCharsets.UTF_8)) {
+            String primeiraLinha = leitor.readLine();
+            if (primeiraLinha == null) {
+                throw new IllegalArgumentException("O arquivo está vazio: " + arquivo.getFileName());
             }
-            List<String> headers = List.copyOf(columns.subList(0, columns.size() - 1));
-            List<Sample> samples = new ArrayList<>();
-            TreeSet<String> labels = new TreeSet<>();
-            String line;
-            int lineNumber = 1;
-            while ((line = reader.readLine()) != null) {
-                lineNumber++;
-                if (line.isBlank()) continue;
-                List<String> cells = parseLine(line, lineNumber);
-                if (cells.size() != columns.size()) {
-                    throw new IllegalArgumentException("Linha " + lineNumber + ": esperado " + columns.size() + " colunas; encontrado " + cells.size() + ".");
-                }
-                double[] values = new double[headers.size()];
-                for (int i = 0; i < values.length; i++) {
-                    try {
-                        values[i] = Double.parseDouble(cells.get(i));
-                        if (!Double.isFinite(values[i])) throw new NumberFormatException();
-                    } catch (NumberFormatException error) {
-                        throw new IllegalArgumentException("Linha " + lineNumber + ", coluna " + headers.get(i) + ": informe um número finito usando ponto decimal.");
-                    }
-                }
-                String label = cells.get(cells.size() - 1).strip();
-                if (label.isEmpty()) throw new IllegalArgumentException("Linha " + lineNumber + ": a classe está vazia.");
-                labels.add(label);
-                samples.add(new Sample(values, label));
+
+            if (primeiraLinha.startsWith("\uFEFF")) {
+                primeiraLinha = primeiraLinha.substring(1);
             }
-            if (samples.isEmpty()) throw new IllegalArgumentException("O CSV contém cabeçalho, mas nenhuma amostra.");
-            return new Dataset(headers, samples, List.copyOf(labels));
+
+            List<String> colunas = analisarLinha(primeiraLinha, 1);
+            validarCabecalho(colunas, arquivo);
+
+            List<String> atributos = List.copyOf(colunas.subList(0, colunas.size() - 1));
+            List<Sample> amostras = new ArrayList<>();
+            TreeSet<String> classes = new TreeSet<>();
+
+            String linha;
+            int numeroLinha = 1;
+            while ((linha = leitor.readLine()) != null) {
+                numeroLinha++;
+                if (linha.isBlank()) {
+                    continue;
+                }
+
+                List<String> valoresTexto = analisarLinha(linha, numeroLinha);
+                if (valoresTexto.size() != colunas.size()) {
+                    throw new IllegalArgumentException("Linha " + numeroLinha + ": esperado " + colunas.size()
+                            + " colunas; encontrado " + valoresTexto.size() + ".");
+                }
+
+                double[] valores = lerValoresNumericos(valoresTexto, atributos, numeroLinha);
+                String classe = valoresTexto.get(valoresTexto.size() - 1).strip();
+                if (classe.isEmpty()) {
+                    throw new IllegalArgumentException("Linha " + numeroLinha + ": a classe está vazia.");
+                }
+
+                classes.add(classe);
+                amostras.add(new Sample(valores, classe));
+            }
+
+            if (amostras.isEmpty()) {
+                throw new IllegalArgumentException("O CSV contém cabeçalho, mas nenhuma amostra.");
+            }
+
+            return new Dataset(atributos, amostras, List.copyOf(classes));
         }
     }
 
-    private static List<String> parseLine(String line, int lineNumber) {
-        List<String> cells = new ArrayList<>();
-        StringBuilder cell = new StringBuilder();
-        boolean quoted = false;
-        boolean closed = false;
-        for (int i = 0; i < line.length(); i++) {
-            char character = line.charAt(i);
-            if (quoted) {
-                if (character == '"') {
-                    if (i + 1 < line.length() && line.charAt(i + 1) == '"') { cell.append('"'); i++; }
-                    else { quoted = false; closed = true; }
-                } else cell.append(character);
-            } else if (character == ',') {
-                cells.add(cell.toString().strip()); cell.setLength(0); closed = false;
-            } else if (character == '"') {
-                if (!cell.toString().isBlank() || closed) throw new IllegalArgumentException("Aspas inválidas na linha " + lineNumber + ".");
-                cell.setLength(0); quoted = true;
-            } else {
-                if (closed && !Character.isWhitespace(character)) throw new IllegalArgumentException("Conteúdo após aspas na linha " + lineNumber + ".");
-                cell.append(character);
+    /** Método de conveniência em português. */
+    public static Dataset ler(Path arquivo) throws IOException {
+        return read(arquivo);
+    }
+
+    private static void validarCabecalho(List<String> colunas, Path arquivo) {
+        if (colunas.size() < 2) {
+            throw new IllegalArgumentException("O CSV precisa de ao menos um atributo e da classe na última coluna.");
+        }
+
+        boolean possuiNomeVazio = colunas.stream().anyMatch(String::isBlank);
+        boolean possuiNomeRepetido = new HashSet<>(colunas).size() != colunas.size();
+        if (possuiNomeVazio || possuiNomeRepetido) {
+            throw new IllegalArgumentException("O cabeçalho deve ter nomes preenchidos e distintos.");
+        }
+    }
+
+    private static double[] lerValoresNumericos(List<String> texto, List<String> atributos, int numeroLinha) {
+        double[] valores = new double[atributos.size()];
+        for (int indice = 0; indice < valores.length; indice++) {
+            try {
+                valores[indice] = Double.parseDouble(texto.get(indice));
+                if (!Double.isFinite(valores[indice])) {
+                    throw new NumberFormatException();
+                }
+            } catch (NumberFormatException erro) {
+                throw new IllegalArgumentException("Linha " + numeroLinha + ", coluna "
+                        + atributos.get(indice) + ": informe um número finito usando ponto decimal.");
             }
         }
-        if (quoted) throw new IllegalArgumentException("Aspas não fechadas na linha " + lineNumber + ". Campos com quebra de linha não são aceitos.");
-        cells.add(cell.toString().strip());
-        return cells;
+        return valores;
+    }
+
+    private static List<String> analisarLinha(String linha, int numeroLinha) {
+        List<String> celulas = new ArrayList<>();
+        StringBuilder conteudo = new StringBuilder();
+        boolean dentroDeAspas = false;
+        boolean aspasFechadas = false;
+
+        for (int indice = 0; indice < linha.length(); indice++) {
+            char caractere = linha.charAt(indice);
+
+            if (dentroDeAspas) {
+                if (caractere == '"') {
+                    if (indice + 1 < linha.length() && linha.charAt(indice + 1) == '"') {
+                        conteudo.append('"');
+                        indice++;
+                    } else {
+                        dentroDeAspas = false;
+                        aspasFechadas = true;
+                    }
+                } else {
+                    conteudo.append(caractere);
+                }
+            } else if (caractere == ',') {
+                celulas.add(conteudo.toString().strip());
+                conteudo.setLength(0);
+                aspasFechadas = false;
+            } else if (caractere == '"') {
+                if (!conteudo.toString().isBlank() || aspasFechadas) {
+                    throw new IllegalArgumentException("Aspas inválidas na linha " + numeroLinha + ".");
+                }
+                conteudo.setLength(0);
+                dentroDeAspas = true;
+            } else {
+                if (aspasFechadas && !Character.isWhitespace(caractere)) {
+                    throw new IllegalArgumentException("Conteúdo após aspas na linha " + numeroLinha + ".");
+                }
+                conteudo.append(caractere);
+            }
+        }
+
+        if (dentroDeAspas) {
+            throw new IllegalArgumentException("Aspas não fechadas na linha " + numeroLinha
+                    + ". Campos com quebra de linha não são aceitos.");
+        }
+
+        celulas.add(conteudo.toString().strip());
+        return celulas;
     }
 }

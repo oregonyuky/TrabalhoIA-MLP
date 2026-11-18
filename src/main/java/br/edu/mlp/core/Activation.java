@@ -1,29 +1,71 @@
 package br.edu.mlp.core;
 
-/** Funções e derivadas especificadas no enunciado, usadas nas duas camadas. */
+/** Funções de ativação e suas derivadas usadas nas camadas da rede. */
 public enum Activation {
     LINEAR("Linear (net / 10)") {
-        public double apply(double net) { return net / 10.0; }
-        public double derivative(double output) { return 0.1; }
+        @Override
+        public double apply(double net) {
+            return net / 10.0;
+        }
+
+        @Override
+        public double derivative(double output) {
+            return 0.1;
+        }
     },
     LOGISTIC("Logística") {
+        @Override
         public double apply(double net) {
-            // Esta forma evita overflow em exp(-net) para net muito negativo.
-            if (net >= 0) return 1.0 / (1.0 + Math.exp(-net));
+            // Evita overflow ao calcular exp(-net) com valores muito negativos.
+            if (net >= 0) {
+                return 1.0 / (1.0 + Math.exp(-net));
+            }
+
             double exponential = Math.exp(net);
             return exponential / (1.0 + exponential);
         }
-        public double derivative(double output) { return output * (1.0 - output); }
+
+        @Override
+        public double derivative(double output) {
+            return output * (1.0 - output);
+        }
     },
     TANH("Tangente hiperbólica") {
-        public double apply(double net) { return Math.tanh(net); }
-        public double derivative(double output) { return 1.0 - output * output; }
+        @Override
+        public double apply(double net) {
+            return Math.tanh(net);
+        }
+
+        @Override
+        public double derivative(double output) {
+            return 1.0 - output * output;
+        }
     };
 
     private final String label;
-    Activation(String label) { this.label = label; }
+
+    Activation(String label) {
+        this.label = label;
+    }
+
+    /** Calcula a saída da função a partir do potencial líquido. */
     public abstract double apply(double net);
-    /** A derivada recebe i = f(net), conforme a tabela do PDF. */
+
+    /** Calcula a derivada usando i = f(net), conforme a implementação da rede. */
     public abstract double derivative(double output);
-    @Override public String toString() { return label; }
+
+    /** Nome amigável em português da função de ativação. */
+    public double aplicar(double potencialLiquido) {
+        return apply(potencialLiquido);
+    }
+
+    /** Derivada em português que reutiliza a implementação existente. */
+    public double derivada(double saida) {
+        return derivative(saida);
+    }
+
+    @Override
+    public String toString() {
+        return label;
+    }
 }

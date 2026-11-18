@@ -1,3 +1,4 @@
+
 package br.edu.mlp.core;
 
 /** Entrada normalizada e saída desejada one-hot (um neurônio por classe). */
