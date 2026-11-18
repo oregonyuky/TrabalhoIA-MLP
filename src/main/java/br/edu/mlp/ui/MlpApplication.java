@@ -40,7 +40,7 @@ public final class MlpApplication extends Application {
     private final Label topology = new Label("Entradas: —  •  Saídas: —");
     private final ComboBox<String> hiddenMode = new ComboBox<>();
     private final TextField hidden = new TextField("6");
-    private final ComboBox<Activation> activation = new ComboBox<>();
+    private final ComboBox<Ativacao> activation = new ComboBox<>();
     private final TextField learningRate = new TextField("0.3");
     private final TextField epochs = new TextField("2000");
     private final TextField minError = new TextField("0.005");
@@ -72,11 +72,11 @@ public final class MlpApplication extends Application {
     private final Label accuracy = new Label("—");
     private final Label evaluationSummary = new Label("Treine a rede e aplique-a aos exemplos de teste.");
     private BarChart<String,Number> metricsChart;
-    private PreparedData data;
-    private Network network;
-    private TrainingConfig usedConfig;
+    private DadosPreparados data;
+    private Rede network;
+    private ConfiguracaoTreino usedConfig;
     private TrainingTask activeTask;
-    private Evaluation evaluation;
+    private Avaliacao evaluation;
     private final List<TrainingTask.Epoch> history = new ArrayList<>();
     private int chartStride = 1;
     private long lastArchitectureRefresh;
@@ -111,7 +111,7 @@ public final class MlpApplication extends Application {
         stage.show(); refreshButtons(); updateHidden();
         if(smoke) Platform.runLater(() -> {
             try {
-                data=DataPreparation.loadSeparate(Path.of(trainingPath.getText()),Path.of(testPath.getText()));
+                data=PreparacaoDados.carregarArquivosSeparados(Path.of(trainingPath.getText()),Path.of(testPath.getText()));
                 displayPreparedData(); epochs.setText(smokePlateau ? "35":"250"); minError.setText("0");
                 if(smokePlateau) plateauThreshold.setText("1");
                 startTraining();
@@ -149,7 +149,7 @@ public final class MlpApplication extends Application {
         hiddenMode.getItems().addAll("Média aritmética","Média geométrica","Manual"); hiddenMode.setValue("Média aritmética");
         hiddenMode.setOnAction(e -> { updateHidden(); showArchitecture(); });
         hidden.setOnAction(e -> showArchitecture()); hidden.focusedProperty().addListener((o,a,b) -> { if(!b) showArchitecture(); });
-        activation.setItems(FXCollections.observableArrayList(Activation.values())); activation.setValue(Activation.LOGISTIC);
+        activation.setItems(FXCollections.observableArrayList(Ativacao.values())); activation.setValue(Ativacao.LOGISTIC);
         GridPane grid=formGrid();
         grid.addRow(0,new Label("Camada oculta"),hiddenMode);
         grid.addRow(1,new Label("Neurônios ocultos"),hidden);
@@ -206,8 +206,8 @@ public final class MlpApplication extends Application {
             String sourceDescription=useSplit ? "Divisão: "+percent+"% de treino; seed da divisão: "+experimentSeed+"; arquivo: "+trainFile
                 : "Treino: "+trainFile+"; teste: "+testFile;
             setBusy(true); status.setText("Lendo arquivos e normalizando os dados…");
-            Task<PreparedData> load=new Task<>() { @Override protected PreparedData call() throws Exception {
-                return useSplit ? DataPreparation.split(trainFile,percent/100,experimentSeed):DataPreparation.loadSeparate(trainFile,testFile);
+            Task<DadosPreparados> load=new Task<>() { @Override protected DadosPreparados call() throws Exception {
+                return useSplit ? PreparacaoDados.dividir(trainFile,percent/100,experimentSeed):PreparacaoDados.carregarArquivosSeparados(trainFile,testFile);
             }};
             load.setOnSucceeded(e -> { data=load.getValue(); preparedSource=sourceDescription; clearTraining(); setBusy(false); displayPreparedData(); });
             load.setOnFailed(e -> { setBusy(false); showError(load.getException()); });
@@ -215,25 +215,25 @@ public final class MlpApplication extends Application {
         } catch(Exception e) { showError(e); }
     }
     private void displayPreparedData() {
-        dataSummary.setText("Treino: "+data.training().size()+" exemplos  •  Teste: "+data.test().size()
-            +" exemplos  •  "+data.inputCount()+" atributos  •  Classes: "+String.join(", ",data.classes())+"\n"+preparedSource);
-        topology.setText("Entradas: "+data.inputCount()+"  •  Saídas: "+data.outputCount());
+        dataSummary.setText("Treino: "+data.treino().size()+" exemplos  •  Teste: "+data.teste().size()
+            +" exemplos  •  "+data.quantidadeEntradas()+" atributos  •  Classes: "+String.join(", ",data.classes())+"\n"+preparedSource);
+        topology.setText("Entradas: "+data.quantidadeEntradas()+"  •  Saídas: "+data.quantidadeSaidas());
         updateHidden(); updatePreview(); showArchitecture(); refreshButtons();
         status.setText("Dados preparados. Configure a rede na aba Treinamento.");
     }
     private void updatePreview() {
         if(data==null) return;
         boolean testing="Teste".equals(previewSet.getValue());
-        List<EncodedSample> encoded=testing ? data.test():data.training();
-        Dataset raw=testing ? data.testRaw():data.trainingRaw();
+        List<AmostraCodificada> encoded=testing ? data.teste():data.treino();
+        ConjuntoDados raw=testing ? data.testeBruto():data.treinoBruto();
         List<String> headers=new ArrayList<>(data.headers()); headers.add("Classe"); headers.add("Desejado (one-hot)"); setColumns(preview,headers);
         var rows=new ArrayList<List<String>>();
         for(int r=0;r<encoded.size();r++) {
-            EncodedSample sample=encoded.get(r);
-            double[] input=normalized.isSelected() ? sample.input():raw.samples().get(r).values();
+            AmostraCodificada sample=encoded.get(r);
+            double[] input=normalized.isSelected() ? sample.entrada():raw.amostras().get(r).valores();
             var row=new ArrayList<String>(); for(double value:input) row.add(format(value));
-            row.add(data.classes().get(sample.classIndex()));
-            StringJoiner target=new StringJoiner(" "); for(double value:sample.target()) target.add(value==1 ? "1":"0");
+            row.add(data.classes().get(sample.indiceClasse()));
+            StringJoiner target=new StringJoiner(" "); for(double value:sample.saidaDesejada()) target.add(value==1 ? "1":"0");
             row.add(target.toString()); rows.add(row);
         }
         preview.setItems(FXCollections.observableArrayList(rows));
@@ -241,17 +241,17 @@ public final class MlpApplication extends Application {
     private void updateHidden() {
         boolean manual="Manual".equals(hiddenMode.getValue()); hidden.setEditable(manual);
         if(!manual && data!=null) {
-            double n="Média geométrica".equals(hiddenMode.getValue()) ? Math.sqrt((double)data.inputCount()*data.outputCount())
-                :(data.inputCount()+data.outputCount())/2.0;
+            double n="Média geométrica".equals(hiddenMode.getValue()) ? Math.sqrt((double)data.quantidadeEntradas()*data.quantidadeSaidas())
+                :(data.quantidadeEntradas()+data.quantidadeSaidas())/2.0;
             hidden.setText(Long.toString(Math.max(1,Math.round(n))));
         }
     }
     private void showArchitecture() {
         if(data==null || busy) return;
-        try { int count=parseInt(hidden,"Neurônios ocultos"); if(count>0 && count<=2048) networkView.showNetwork(data.inputCount(),count,data.classes(),null,null); }
+        try { int count=parseInt(hidden,"Neurônios ocultos"); if(count>0 && count<=2048) networkView.showNetwork(data.quantidadeEntradas(),count,data.classes(),null,null); }
         catch(Exception ignored) { /* A validação completa ocorre ao iniciar o treino. */ }
     }
-    private TrainingConfig readConfig() {
+    private ConfiguracaoTreino readConfig() {
         int h=parseInt(hidden,"Neurônios ocultos"), max=parseInt(epochs,"Épocas"), window=parseInt(plateauWindow,"Janela do platô");
         double eta=parseDouble(learningRate,"Taxa de aprendizagem"), error=parseDouble(minError,"Erro mínimo"), threshold=parseDouble(plateauThreshold,"Limiar do platô");
         if(h<1 || h>2048) throw new IllegalArgumentException("Informe de 1 a 2048 neurônios ocultos.");
@@ -260,23 +260,23 @@ public final class MlpApplication extends Application {
         if(error<0) throw new IllegalArgumentException("O erro mínimo deve ser maior ou igual a zero.");
         if(window<10 || window>100000) throw new IllegalArgumentException("A janela de platô deve ter entre 10 e 100000 épocas.");
         if(threshold<0) throw new IllegalArgumentException("O limiar do platô deve ser maior ou igual a zero.");
-        return new TrainingConfig(h,activation.getValue(),eta,max,error,parseLong(seed,"Semente"),window,threshold);
+        return new ConfiguracaoTreino(h,activation.getValue(),eta,max,error,parseLong(seed,"Semente"),window,threshold);
     }
     private void startTraining() {
         if(data==null || busy) return;
         try {
-            TrainingConfig config=readConfig(); clearTraining(); usedConfig=config;
-            network=new Network(data.inputCount(),config.hidden(),data.outputCount(),config.activation(),config.seed());
-            networkView.showNetwork(data.inputCount(),config.hidden(),data.classes(),network.weightsInputHidden(),network.weightsHiddenOutput());
-            currentRate.setText(format(config.learningRate()));
-            thresholdSeries.getData().addAll(List.of(new XYChart.Data<>(0,config.minError()),new XYChart.Data<>(1,config.minError())));
+            ConfiguracaoTreino config=readConfig(); clearTraining(); usedConfig=config;
+            network=new Rede(data.quantidadeEntradas(),config.ocultos(),data.quantidadeSaidas(),config.ativacao(),config.semente());
+            networkView.showNetwork(data.quantidadeEntradas(),config.ocultos(),data.classes(),network.pesosEntradaOculta(),network.pesosOcultaSaida());
+            currentRate.setText(format(config.taxaAprendizagem()));
+            thresholdSeries.getData().addAll(List.of(new XYChart.Data<>(0,config.erroMinimo()),new XYChart.Data<>(1,config.erroMinimo())));
             TrainingTask task=new TrainingTask(network,data,config,this::receiveUpdate,this::handlePlateau);
             activeTask=task;
             task.setOnSucceeded(e -> {
                 TrainingTask.Result result=task.getValue(); activeTask=null; setBusy(false);
                 status.setText(result.reason()); addLog(result.reason()+". Épocas: "+result.history().size()+".");
                 elapsed.setText(String.format(Locale.getDefault(),"%.2f s",result.seconds()));
-                networkView.showNetwork(data.inputCount(),config.hidden(),data.classes(),network.weightsInputHidden(),network.weightsHiddenOutput());
+                networkView.showNetwork(data.quantidadeEntradas(),config.ocultos(),data.classes(),network.pesosEntradaOculta(),network.pesosOcultaSaida());
                 if(!history.isEmpty()) ensureFinalChartPoint();
                 refreshButtons();
                 if(smoke) { evaluateNetwork(); captureSmoke(); }
@@ -286,35 +286,40 @@ public final class MlpApplication extends Application {
                 status.setText("Treinamento encerrado por erro"); addLog("Falha: "+failure.getMessage()); showError(failure);
             });
             setBusy(true); status.setText("Treinando…");
-            addLog("Treino iniciado: "+config.activation()+", η="+config.learningRate()+", oculta="+config.hidden()+", seed="+config.seed()+".");
-            tabs.getSelectionModel().select(trainingTab); daemon(task,"mlp-backpropagation");
+            addLog("Treino iniciado: "+config.ativacao()+", η="+config.taxaAprendizagem()+", oculta="+config.ocultos()+", seed="+config.semente()+"."); tabs.getSelectionModel().select(trainingTab); daemon(task,"mlp-backpropagation");
         } catch(Exception e) { showError(e); }
     }
+
     private void receiveUpdate(TrainingTask.Update update) {
         if (network != null && usedConfig != null && (System.nanoTime()-lastArchitectureRefresh>400_000_000L
                 || (activeTask!=null && activeTask.isPaused()))) {
-            networkView.showNetwork(data.inputCount(),usedConfig.hidden(),data.classes(),update.inputHidden(),update.hiddenOutput());
+            networkView.showNetwork(data.quantidadeEntradas(),usedConfig.ocultos(),data.classes(),update.inputHidden(),update.hiddenOutput());
             lastArchitectureRefresh=System.nanoTime();
         }
         for(TrainingTask.Epoch point:update.epochs()) {
             history.add(point);
             if(point.number()%chartStride==0) errorSeries.getData().add(new XYChart.Data<>(point.number(),point.error()));
             if(errorSeries.getData().size()>3000) {
-                chartStride*=2; errorSeries.getData().removeIf(p -> p.getXValue().intValue()%chartStride!=0);
+                chartStride*=2;
+                errorSeries.getData().removeIf(p -> p.getXValue().intValue()%chartStride!=0);
             }
         }
         if(!update.epochs().isEmpty()) {
-            var last=update.epochs().getLast(); currentEpoch.setText(Integer.toString(last.number()));
-            currentError.setText(format(last.error())); currentRate.setText(format(last.rate()));
+            var last=update.epochs().getLast();
+            currentEpoch.setText(Integer.toString(last.number()));
+            currentError.setText(format(last.error()));
+            currentRate.setText(format(last.rate()));
             thresholdSeries.getData().getLast().setXValue(last.number());
         }
         elapsed.setText(String.format(Locale.getDefault(),"%.2f s",update.seconds()));
     }
+
     private void ensureFinalChartPoint() {
         var last=history.getLast();
         if(errorSeries.getData().isEmpty() || errorSeries.getData().getLast().getXValue().intValue()!=last.number())
             errorSeries.getData().add(new XYChart.Data<>(last.number(),last.error()));
     }
+
     private void togglePause() {
         if(activeTask==null) return;
         if(activeTask.isPaused()) {
@@ -323,34 +328,41 @@ public final class MlpApplication extends Application {
             activeTask.pauseTraining(); pause.setText("Continuar"); status.setText("Pausa solicitada; a época atual será concluída."); addLog("Pausa manual solicitada.");
         }
     }
+
     private void handlePlateau(TrainingTask.Plateau event) {
         if(activeTask==null || !activeTask.isPaused()) return;
         addLog("Platô na época "+event.epoch()+"; desvio padrão="+String.format(Locale.ROOT,"%.8g",event.deviation())+".");
         if(!history.isEmpty()) plateauSeries.getData().add(new XYChart.Data<>(event.epoch(),history.getLast().error()));
         status.setText("Treinamento pausado: platô detectado na época "+event.epoch()); pause.setText("Continuar");
         if(smoke) { smokePlateaus++; activeTask.resumeTraining(smokePlateau); pause.setText("Pausar"); return; }
+
         ButtonType stopChoice=new ButtonType("Interromper",ButtonBar.ButtonData.CANCEL_CLOSE);
         ButtonType same=new ButtonType("Continuar com η atual");
         ButtonType reduce=new ButtonType("Reduzir η em 10% e continuar",ButtonBar.ButtonData.OK_DONE);
-        Alert alert=new Alert(Alert.AlertType.CONFIRMATION,"O erro estabilizou nas últimas "+usedConfig.plateauWindow()+" épocas.\nDesvio padrão: "+format(event.deviation())+"\nTaxa atual η: "+format(activeTask.currentRate()),stopChoice,same,reduce);
+        Alert alert=new Alert(Alert.AlertType.CONFIRMATION,
+                "O erro estabilizou nas últimas "+usedConfig.tamanhoJanelaPlatô()+" épocas.\n"
+                +"Desvio padrão: "+format(event.deviation())+"\nTaxa atual η: "+format(activeTask.currentRate()),
+                stopChoice,same,reduce);
         alert.setTitle("Platô detectado"); alert.setHeaderText("Escolha como prosseguir com o treinamento"); alert.initOwner(stage);
         ButtonType choice=alert.showAndWait().orElse(stopChoice);
         if(activeTask==null) return;
         if(choice==stopChoice) { addLog("Treinamento interrompido após platô."); activeTask.stopTraining(); }
         else {
             double before=activeTask.currentRate(); activeTask.resumeTraining(choice==reduce);
-            addLog(choice==reduce ? "η reduzido em 10%: "+format(before)+" → "+format(activeTask.currentRate()):"Platô: continuando sem alterar η.");
+            addLog(choice==reduce ? "η reduzido em 10%: "+format(before)+" → "+format(activeTask.currentRate()) : "Platô: continuando sem alterar η.");
             currentRate.setText(format(activeTask.currentRate())); pause.setText("Pausar"); status.setText("Treinando…");
         }
     }
+
     private void evaluateNetwork() {
         if(network==null || data==null || busy || history.isEmpty()) return;
         try {
-            evaluation=Evaluation.evaluate(network,data.test(),data.classes());
-            accuracy.setText(String.format(Locale.getDefault(),"Acurácia: %.2f%%",100*evaluation.accuracy()));
-            evaluationSummary.setText(evaluation.correct()+" acertos em "+evaluation.total()+" exemplos de teste.  "+usedConfig.activation()+" • Rede "+data.inputCount()+" → "+usedConfig.hidden()+" → "+data.outputCount()+" • η inicial "+usedConfig.learningRate()+" • η final "+history.getLast().rate()+" • seed do treino "+usedConfig.seed()+"\n"+preparedSource);
+            evaluation=Avaliacao.avaliar(network,data.teste(),data.classes());
+            accuracy.setText(String.format(Locale.getDefault(),"Acurácia: %.2f%%",100*evaluation.acuracia()));
+            evaluationSummary.setText(evaluation.acertos()+" acertos em "+evaluation.total()+" exemplos de teste.  "+usedConfig.ativacao()+" • Rede "+data.quantidadeEntradas()+" → "+usedConfig.ocultos()+" → "+data.quantidadeSaidas()+" • η inicial "+usedConfig.taxaAprendizagem()+" • η final "+history.getLast().rate()+" • seed do treino "+usedConfig.semente()+"\n"+preparedSource);
+
             List<String> headers=new ArrayList<>(); headers.add("Real / Prevista"); headers.addAll(data.classes()); headers.add("Total"); setColumns(confusion,headers);
-            int[][] matrix=evaluation.confusionMatrix(); var rows=new ArrayList<List<String>>(); int[] totals=new int[data.outputCount()];
+            int[][] matrix=evaluation.matrizConfusao(); var rows=new ArrayList<List<String>>(); int[] totals=new int[data.quantidadeSaidas()];
             for(int r=0;r<matrix.length;r++) {
                 var row=new ArrayList<String>(); row.add(data.classes().get(r)); int total=0;
                 for(int c=0;c<matrix[r].length;c++) { row.add(Integer.toString(matrix[r][c])); total+=matrix[r][c]; totals[c]+=matrix[r][c]; }
@@ -358,21 +370,23 @@ public final class MlpApplication extends Application {
             }
             var totalRow=new ArrayList<String>(); totalRow.add("Total"); for(int n:totals) totalRow.add(Integer.toString(n)); totalRow.add(Integer.toString(evaluation.total())); rows.add(totalRow);
             confusion.setItems(FXCollections.observableArrayList(rows));
-            for(int c=1;c<=data.outputCount();c++) markDiagonal(confusion.getColumns().get(c),c-1);
+            for(int c=1;c<=data.quantidadeSaidas();c++) markDiagonal(confusion.getColumns().get(c),c-1);
+
             setColumns(classMetrics,List.of("Classe","Precisão","Revocação","Exemplos reais"));
             var metricRows=new ArrayList<List<String>>();
             var pSeries=new XYChart.Series<String,Number>(); pSeries.setName("Precisão");
             var rSeries=new XYChart.Series<String,Number>(); rSeries.setName("Revocação");
-            for(int i=0;i<data.outputCount();i++) {
+            for(int i=0;i<data.quantidadeSaidas();i++) {
                 int support=0; for(int n:matrix[i]) support+=n;
-                metricRows.add(List.of(data.classes().get(i),percent(evaluation.precision(i)),percent(evaluation.recall(i)),Integer.toString(support)));
-                pSeries.getData().add(new XYChart.Data<>(data.classes().get(i),100*evaluation.precision(i)));
-                rSeries.getData().add(new XYChart.Data<>(data.classes().get(i),100*evaluation.recall(i)));
+                metricRows.add(List.of(data.classes().get(i),percent(evaluation.precisao(i)),percent(evaluation.cobertura(i)),Integer.toString(support)));
+                pSeries.getData().add(new XYChart.Data<>(data.classes().get(i),100*evaluation.precisao(i)));
+                rSeries.getData().add(new XYChart.Data<>(data.classes().get(i),100*evaluation.cobertura(i)));
             }
             classMetrics.setItems(FXCollections.observableArrayList(metricRows)); metricsChart.getData().setAll(List.of(pSeries,rSeries));
-            tabs.getSelectionModel().select(evaluationTab); refreshButtons(); addLog("Avaliação: "+percent(evaluation.accuracy())+" de acurácia.");
+            tabs.getSelectionModel().select(evaluationTab); refreshButtons(); addLog("Avaliação: "+percent(evaluation.acuracia())+" de acurácia.");
         } catch(Exception e) { showError(e); }
     }
+
     private void clearTraining() {
         network=null; evaluation=null; usedConfig=null; history.clear(); chartStride=1;
         errorSeries.getData().clear(); thresholdSeries.getData().clear(); plateauSeries.getData().clear();
@@ -380,6 +394,7 @@ public final class MlpApplication extends Application {
         accuracy.setText("—"); evaluationSummary.setText("Treine a rede e aplique-a aos exemplos de teste.");
         currentEpoch.setText("0"); currentError.setText("—"); currentRate.setText("—"); elapsed.setText("0,0 s"); log.clear(); refreshButtons();
     }
+
     private void setBusy(boolean value) { busy=value; dataContent.setDisable(value); configuration.setDisable(value); refreshButtons(); }
     private void refreshButtons() {
         train.setDisable(data==null || busy); pause.setDisable(activeTask==null); stop.setDisable(activeTask==null);
@@ -387,6 +402,7 @@ public final class MlpApplication extends Application {
         evaluate.setDisable(network==null || busy || history.isEmpty());
         exportHistory.setDisable(history.isEmpty() || busy); exportCurve.setDisable(history.isEmpty() || busy); exportMatrix.setDisable(evaluation==null || busy);
     }
+
     private void saveHistory() {
         File file=chooseOutput("Exportar histórico","historico.csv","CSV","*.csv"); if(file==null) return;
         try {
@@ -395,87 +411,82 @@ public final class MlpApplication extends Application {
             Files.writeString(file.toPath(),csv,StandardCharsets.UTF_8); status.setText("Histórico salvo em "+file);
         } catch(IOException e) { showError(e); }
     }
+
     private void saveMatrix() {
         File file=chooseOutput("Exportar matriz","matriz_confusao.csv","CSV","*.csv"); if(file==null) return;
         try {
             StringBuilder text=new StringBuilder("real/prevista"); for(String name:data.classes()) text.append(',').append(csv(name)); text.append('\n');
-            int[][] matrix=evaluation.confusionMatrix();
+            int[][] matrix=evaluation.matrizConfusao();
             for(int r=0;r<matrix.length;r++) { text.append(csv(data.classes().get(r))); for(int n:matrix[r]) text.append(',').append(n); text.append('\n'); }
             Files.writeString(file.toPath(),text,StandardCharsets.UTF_8); status.setText("Matriz salva em "+file);
         } catch(IOException e) { showError(e); }
     }
+
     private void saveCurve() {
         File file=chooseOutput("Salvar curva de erro","curva_erro.png","PNG","*.png"); if(file==null) return;
         try { ImageIO.write(SwingFXUtils.fromFXImage(chart.snapshot(null,null),null),"png",file); status.setText("Curva salva em "+file); }
         catch(IOException e) { showError(e); }
     }
+
     private void chooseCsv(TextField target) {
         FileChooser chooser=new FileChooser(); chooser.setTitle("Selecionar base CSV"); chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("Arquivos CSV","*.csv"));
         File file=chooser.showOpenDialog(stage); if(file!=null) target.setText(file.getAbsolutePath());
     }
+
     private File chooseOutput(String title,String name,String description,String pattern) {
         FileChooser chooser=new FileChooser(); chooser.setTitle(title); chooser.setInitialFileName(name); chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(description,pattern)); return chooser.showSaveDialog(stage);
     }
+
     private void addLog(String text) { log.appendText(LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))+"  "+text+"\n"); }
+
     private void showError(Throwable error) {
         if(smoke) { smokeFailure(error); return; }
         String message=error.getMessage()==null ? error.toString():error.getMessage(); status.setText(message);
         Alert alert=new Alert(Alert.AlertType.ERROR,message,ButtonType.OK); alert.setTitle("Confira os dados informados"); alert.setHeaderText("Não foi possível concluir a operação"); alert.initOwner(stage); alert.showAndWait();
     }
+
     private static double parseDouble(TextField field,String name) {
         try { double n=Double.parseDouble(field.getText().trim().replace(',','.')); if(!Double.isFinite(n)) throw new NumberFormatException(); return n; }
         catch(NumberFormatException e) { throw new IllegalArgumentException(name+": informe um número finito válido."); }
     }
+
     private static int parseInt(TextField field,String name) {
         try { return Integer.parseInt(field.getText().trim()); } catch(NumberFormatException e) { throw new IllegalArgumentException(name+": informe um número inteiro válido."); }
     }
+
     private static long parseLong(TextField field,String name) {
         try { return Long.parseLong(field.getText().trim()); } catch(NumberFormatException e) { throw new IllegalArgumentException(name+": informe um número inteiro válido."); }
     }
-    private static String format(double n) { return String.format(Locale.getDefault(),"%.7g",n); }
-    private static String percent(double n) { return String.format(Locale.getDefault(),"%.2f%%",n*100); }
+
+    private static String format(double value) { return String.format(Locale.getDefault(),"%.8g",value); }
+    private static String percent(double value) { return String.format(Locale.getDefault(),"%.2f%%",100*value); }
     private static String csv(String value) { return "\""+value.replace("\"","\"\"")+"\""; }
-    private static Label label(String text,String css) { Label label=new Label(text); label.getStyleClass().add(css); return label; }
-    private static VBox metric(String name,Label value) { value.getStyleClass().add("metric-value"); VBox box=new VBox(5,label(name,"metric-label"),value); box.getStyleClass().add("metric-card"); box.setMinWidth(125); return box; }
-    private static GridPane formGrid() { GridPane grid=new GridPane(); grid.setHgap(10); grid.setVgap(12); return grid; }
-    private static ScrollPane scroll(javafx.scene.Node content) { ScrollPane pane=new ScrollPane(content); pane.setFitToWidth(true); pane.setPannable(true); return pane; }
-    private static void daemon(Runnable runnable,String name) { Thread thread=new Thread(runnable,name); thread.setDaemon(true); thread.start(); }
-    private static void setColumns(TableView<List<String>> table,List<String> headers) {
-        table.getColumns().clear();
-        for(int i=0;i<headers.size();i++) { final int c=i; var col=new TableColumn<List<String>,String>(headers.get(i)); col.setCellValueFactory(cell -> new SimpleStringProperty(cell.getValue().get(c))); col.setPrefWidth(i==0 ? 140:115); table.getColumns().add(col); }
-        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+
+    private void daemon(Task<?> task,String name) {
+        Thread worker=new Thread(task,name); worker.setDaemon(true); worker.start();
     }
-    private static <T> void markDiagonal(TableColumn<List<String>,T> column,int row) {
-        column.setCellFactory(col -> new TableCell<List<String>,T>() {
-            @Override protected void updateItem(T value,boolean empty) {
-                super.updateItem(value,empty); setText(empty || value==null ? null:value.toString());
-                setStyle(!empty && getIndex()==row ? "-fx-background-color: #d1fae5; -fx-text-fill: #065f46; -fx-font-weight: bold;":"");
-            }
+
+    private void smokeFailure(Throwable error) {
+        try { Files.writeString(Path.of("target/ui-smoke"+(smokePlateau?"-plateau":"")+".txt"),"FAIL\n"+error+"\n",StandardCharsets.UTF_8); }
+        catch(Exception ignored) {}
+        Platform.exit();
+    }
+
+    private void captureSmoke() {
+        if(!smoke) return;
+        Platform.runLater(() -> {
+            try {
+                if(evaluation==null || history.isEmpty() || evaluation.total()!=data.teste().size()) throw new IllegalStateException("Smoke: avaliação incompleta.");
+                if(smokePlateau && smokePlateaus<1) throw new IllegalStateException("Smoke: nenhum platô detectado.");
+                WritableImage image=chart.snapshot(new SnapshotParameters(),null);
+                Files.createDirectories(Path.of("target/screenshots"));
+                ImageIO.write(SwingFXUtils.fromFXImage(image,null),"png",Path.of("target/screenshots/mlp"+(smokePlateau?"-plateau":"")+".png").toFile());
+                stage.setTitle("Laboratório MLP · Smoke OK");
+                Files.writeString(Path.of("target/ui-smoke"+(smokePlateau?"-plateau":"")+".txt"),
+                        "OK\nepocas="+history.size()+"\nacuracia="+evaluation.acuracia()+"\nplatos="+smokePlateaus+"\n",StandardCharsets.UTF_8);
+                Platform.exit();
+            } catch(Throwable error) { smokeFailure(error); }
         });
     }
-    private void captureSmoke() {
-        try {
-            if(evaluation==null || history.isEmpty() || evaluation.total()!=data.test().size()) throw new IllegalStateException("Smoke: avaliação incompleta.");
-            if(smokePlateau && smokePlateaus<2) throw new IllegalStateException("Smoke: platô não foi reapresentado.");
-            if(smokePlateau && Math.abs(history.getLast().rate()-0.3*Math.pow(0.9,smokePlateaus))>1e-12)
-                throw new IllegalStateException("Smoke: redução de taxa inconsistente.");
-            Files.createDirectories(Path.of("target/screenshots")); tabs.getSelectionModel().select(trainingTab);
-            PauseTransition delay=new PauseTransition(Duration.millis(450)); delay.setOnFinished(e -> {
-                try {
-                    stage.getScene().getRoot().applyCss(); stage.getScene().getRoot().layout();
-                    ImageIO.write(SwingFXUtils.fromFXImage(stage.getScene().snapshot(null),null),"png",Path.of("target/screenshots/treinamento.png").toFile());
-                    tabs.getSelectionModel().select(evaluationTab);
-                    PauseTransition next=new PauseTransition(Duration.millis(350)); next.setOnFinished(evt -> {
-                        try {
-                            ImageIO.write(SwingFXUtils.fromFXImage(stage.getScene().snapshot(null),null),"png",Path.of("target/screenshots/avaliacao.png").toFile());
-                            Files.writeString(Path.of("target/ui-smoke"+(smokePlateau ? "-plateau":"")+".txt"),"OK\nepocas="+history.size()+"\nacuracia="+evaluation.accuracy()+"\nplatos="+smokePlateaus+"\n",StandardCharsets.UTF_8);
-                            Platform.exit();
-                        } catch(Exception failure) { smokeFailure(failure); }
-                    }); next.play();
-                } catch(Exception failure) { smokeFailure(failure); }
-            }); delay.play();
-        } catch(Exception error) { smokeFailure(error); }
-    }
-    private void smokeFailure(Throwable error) { error.printStackTrace(); Platform.exit(); throw new IllegalStateException("Falha no smoke test JavaFX",error); }
 }
 

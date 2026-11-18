@@ -3,20 +3,16 @@ package br.edu.mlp.core;
 import java.util.Arrays;
 import java.util.List;
 
-/** Normaliza atributos usando os extremos calculados no treino. */
 public final class NormalizadorMinMax {
     private final double[] minimo;
     private final double[] maximo;
 
-    public NormalizadorMinMax(List<Amostra> amostrasTreino) {
-        if (amostrasTreino.isEmpty()) throw new IllegalArgumentException("O treino não pode estar vazio.");
-        int quantidade = amostrasTreino.getFirst().valores().length;
-        minimo = new double[quantidade];
-        maximo = new double[quantidade];
-        Arrays.fill(minimo, Double.POSITIVE_INFINITY);
-        Arrays.fill(maximo, Double.NEGATIVE_INFINITY);
-
-        for (Amostra amostra : amostrasTreino) {
+    public NormalizadorMinMax(List<Amostra> treino) {
+        if (treino.isEmpty()) throw new IllegalArgumentException("O treino não pode estar vazio.");
+        int quantidade = treino.getFirst().valores().length;
+        minimo = new double[quantidade]; maximo = new double[quantidade];
+        Arrays.fill(minimo, Double.POSITIVE_INFINITY); Arrays.fill(maximo, Double.NEGATIVE_INFINITY);
+        for (Amostra amostra : treino) {
             double[] valores = amostra.valores();
             if (valores.length != quantidade) throw new IllegalArgumentException("Dimensões inconsistentes.");
             for (int indice = 0; indice < quantidade; indice++) {
@@ -38,13 +34,11 @@ public final class NormalizadorMinMax {
                 double intervalo = maximo[indice] - minimo[indice];
                 normalizados[indice] = Double.isFinite(intervalo)
                         ? (valores[indice] - minimo[indice]) / intervalo
-                        : (valores[indice] / 2.0 - minimo[indice] / 2.0)
-                        / (maximo[indice] / 2.0 - minimo[indice] / 2.0);
+                        : (valores[indice] / 2.0 - minimo[indice] / 2.0) / (maximo[indice] / 2.0 - minimo[indice] / 2.0);
             }
         }
         return normalizados;
     }
-
     public double[] minimo() { return minimo.clone(); }
     public double[] maximo() { return maximo.clone(); }
 }
